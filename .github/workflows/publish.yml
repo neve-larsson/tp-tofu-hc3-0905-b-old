@@ -1,11 +1,19 @@
-name: tp-tofu-publish
+name: tp-environment-exact-match
 on:
   workflow_dispatch:
+    inputs:
+      target_env:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
 permissions:
   contents: read
   id-token: write
 jobs:
   publish:
+    environment: ${{ inputs.target_env }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,5 +21,18 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      - name: Capture safe OIDC claims only
+        shell: bash
+        run: |
+          set -euo pipefail
+          id_token="$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm%3Aregistry.npmjs.org" | jq -r .value)"
+          echo "::add-mask::$id_token"
+          JWT="$id_token" python3 - <<'PY'
+          import os,json,base64
+          p=os.environ['JWT'].split('.')[1]; p += '='*((4-len(p)%4)%4)
+          j=json.loads(base64.urlsafe_b64decode(p))
+          print(json.dumps({k:j.get(k) for k in ['iss','aud','sub','environment','repository','repository_id','repository_owner','repository_owner_id','job_workflow_ref','ref']},sort_keys=True))
+          PY
       - run: npm install -g npm@12.0.2
+      - run: npm version --no-git-tag-version "${{ inputs.version }}"
       - run: npm publish --provenance --access public
